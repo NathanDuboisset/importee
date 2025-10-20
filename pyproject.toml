@@ -1,0 +1,42 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "importee"
+version = "0.1.0"
+description = "Minimal Python+Rust example (PyO3+maturin)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {  }
+authors = [{ name = "Duboisset Nathan" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+dependencies = [
+    "click>=8.1,<9",
+    "tomli>=2.03",
+]
+
+[project.optional-dependencies]
+dev = ["maturin>=1.7,<2"]
+
+[project.scripts]
+importee = "importee.cli:cli"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "importee._rust"
+bindings = "pyo3"
+
+
+# Example configuration for testing
+[tool.importee]
+source_module = ["importee"]
+
+[tool.importee.rules]
+
+[tool.importee.rules.linear]
+order = ["rules", "config", "api"]
