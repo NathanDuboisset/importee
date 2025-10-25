@@ -51,7 +51,7 @@ pub fn get_file_imports_for_module(module: &ModulePath) -> Vec<ImportLine> {
     };
 
     for stmt in body.iter() {
-        collect_imports_from_stmt(stmt, module, &mut results);
+        collect_imports_deep(stmt, module, &mut results);
     }
 
     results
@@ -71,9 +71,14 @@ fn collect_imports_from_stmt(stmt: &Stmt, current_module: &ModulePath, out: &mut
             }
         }
         Stmt::ImportFrom(inner) => {
-            // Maintain previous behavior: one entry per 'from ... import ...', targeting the module only
-            let level: usize = if inner.level.is_some() { 1 } else { 0 };
-            let dots = ".".repeat(level);
+            // Build spec: treat as relative ONLY when there is a level and no module name
+            // (avoids misclassifying absolute imports with explicit level=0)
+            let is_relative_no_module = inner.level.is_some() && inner.module.is_none();
+            let dots = if is_relative_no_module {
+                String::from(".")
+            } else {
+                String::new()
+            };
             let module_name = inner
                 .module
                 .as_ref()
@@ -91,6 +96,63 @@ fn collect_imports_from_stmt(stmt: &Stmt, current_module: &ModulePath, out: &mut
                 target_module,
                 import_line: line_no,
             });
+        }
+        _ => {}
+    }
+}
+
+fn collect_imports_deep(stmt: &Stmt, current_module: &ModulePath, out: &mut Vec<ImportLine>) {
+    collect_imports_from_stmt(stmt, current_module, out);
+    match stmt {
+        Stmt::FunctionDef(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+        }
+        Stmt::ClassDef(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+        }
+        Stmt::If(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+            for s in inner.orelse.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+        }
+        Stmt::With(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+        }
+        Stmt::For(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+            for s in inner.orelse.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+        }
+        Stmt::While(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+            for s in inner.orelse.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+        }
+        Stmt::Try(inner) => {
+            for s in inner.body.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+            for s in inner.orelse.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
+            for s in inner.finalbody.iter() {
+                collect_imports_deep(s, current_module, out);
+            }
         }
         _ => {}
     }

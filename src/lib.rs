@@ -1,16 +1,15 @@
 use pyo3::prelude::*;
 // use serde::{Deserialize, Serialize};
 
-mod classification;
 mod configs;
 mod imports;
 mod module_path;
 mod results;
 mod rules;
 
+use crate::imports::classification::ImportResolver;
 use crate::imports::import_line::get_file_imports_for_module;
 use crate::module_path::ModulePath;
-use classification::ImportResolver;
 use configs::{ProjectConfig, RunConfig};
 use results::{CheckResult, Issue};
 use std::fs;
@@ -33,7 +32,8 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
             if run_config.verbose.unwrap_or(false) {
                 println!("[core] walking directory {}", dir_path.to_string_lossy());
             }
-            let resolver = ImportResolver::new(dir_path);
+            let root_module = tokens.first().cloned();
+            let resolver = ImportResolver::new(dir_path, root_module);
             process_file_or_dir(&module_path, &run_config, &mut result, &resolver);
         } else if let Some((_leaf, _head)) = tokens.split_last() {
             let file_path = module_path.file_path();
@@ -49,6 +49,7 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
                     .parent()
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .to_path_buf(),
+                tokens.first().cloned(),
             );
             process_file_or_dir(&module_path, &run_config, &mut result, &resolver);
         } else if run_config.verbose.unwrap_or(false) {
@@ -62,7 +63,7 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
             );
         }
         // Start walking from cwd as a ModulePath (empty path represents cwd root)
-        let resolver = ImportResolver::new(&cwd);
+        let resolver = ImportResolver::new(&cwd, None);
         walk_and_print_py_imports(
             &ModulePath::new(vec![]),
             &run_config,
@@ -127,68 +128,81 @@ fn process_file_or_dir(
         return;
     }
     let rules = rules::build_rules(run_config);
-    let imports = get_file_imports_for_module(module_path)
-        .into_iter()
-        .filter(|imp| {
-            // Only keep imports whose target is local to the project root
-            // Absolute external imports (e.g., __future__, typing) are filtered out
-            resolver.is_local_module(&imp.target_module)
-        })
-        .collect::<Vec<_>>();
-    if !imports.is_empty() {
+    let mut imports = Vec::new();
+    for imp in get_file_imports_for_module(module_path).into_iter() {
+        let (is_local, reason) = resolver.classify_module(&imp.target_module);
+        if is_local {
+            imports.push(imp);
+        } else if run_config.verbose.unwrap_or(false) {
+            println!(
+                "[external] {} -> {} ({})",
+                imp.from_module.to_dotted(),
+                imp.target_module.to_dotted(),
+                reason
+            );
+        }
+    }
+    // Print file visited for normal/verbose modes
+    if !run_config.quiet.unwrap_or(false) {
         println!("=== {} ===", module_path.to_dotted());
-        for imp in imports.iter() {
+    }
+
+    for imp in imports.iter() {
+        if run_config.verbose.unwrap_or(false) {
             println!("{}", imp);
-            for rule in rules.iter() {
-                let ok = rule.check_line(&module_path.file_path(), imp);
+        }
+        for rule in rules.iter() {
+            let ok = rule.check_line(&module_path.file_path(), imp);
+            if run_config.verbose.unwrap_or(false) {
                 println!("  rule {}: {}", rule.name(), if ok { "ok" } else { "FAIL" });
-                if !ok {
-                    let message = if rule.name() == "linear_order_in_folder" {
-                        let from = if imp.from_module.is_empty() {
-                            String::from("<unknown>")
-                        } else {
-                            imp.from_module.to_dotted()
-                        };
-                        let target = if imp.target_module.is_empty() {
-                            String::from("<unknown>")
-                        } else {
-                            imp.target_module.to_dotted()
-                        };
-                        let folder = if run_config.source_module.is_empty() {
-                            String::from("<unknown>")
-                        } else {
-                            crate::module_path::ModulePath::new(run_config.source_module.clone())
-                                .to_dotted()
-                        };
-                        let expected_order = if let Some(r) = &run_config.rules {
-                            if let Some(linear) = &r.linear {
-                                if linear.order.is_empty() {
-                                    String::from("<unspecified>")
-                                } else {
-                                    linear.order.join(" -> ")
-                                }
-                            } else {
+            }
+            if !ok {
+                let message = if rule.name() == "linear_order_in_folder" {
+                    let from = if imp.from_module.is_empty() {
+                        String::from("<unknown>")
+                    } else {
+                        imp.from_module.to_dotted()
+                    };
+                    let target = if imp.target_module.is_empty() {
+                        String::from("<unknown>")
+                    } else {
+                        imp.target_module.to_dotted()
+                    };
+                    let folder = if run_config.source_module.is_empty() {
+                        String::from("<unknown>")
+                    } else {
+                        crate::module_path::ModulePath::new(run_config.source_module.clone())
+                            .to_dotted()
+                    };
+                    let expected_order = if let Some(r) = &run_config.rules {
+                        if let Some(linear) = &r.linear {
+                            if linear.order.is_empty() {
                                 String::from("<unspecified>")
+                            } else {
+                                linear.order.join(" -> ")
                             }
                         } else {
                             String::from("<unspecified>")
-                        };
-                        format!(
-                            "linear_order_in_folder: line {}: import {} -> {} breaks order in module {}. Expected order: {}",
-                            imp.import_line, from, target, folder, expected_order
-                        )
+                        }
                     } else {
-                        format!("rule '{}' failed at line {}", rule.name(), imp.import_line)
+                        String::from("<unspecified>")
                     };
+                    format!(
+                        "linear_order_in_folder: line {}: import {} -> {} breaks order in module {}. Expected order: {}",
+                        imp.import_line, from, target, folder, expected_order
+                    )
+                } else {
+                    format!("rule '{}' failed at line {}", rule.name(), imp.import_line)
+                };
 
-                    result.issues.push(Issue {
-                        path: module_path.file_path().to_string_lossy().to_string(),
-                        message,
-                    });
-                }
+                result.issues.push(Issue {
+                    path: module_path.file_path().to_string_lossy().to_string(),
+                    message,
+                });
             }
         }
-    } else if run_config.verbose.unwrap_or(false) {
+    }
+    if imports.is_empty() && run_config.verbose.unwrap_or(false) {
         println!(
             "[core] no imports found in {}",
             module_path.file_path().to_string_lossy()

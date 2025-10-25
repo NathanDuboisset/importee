@@ -27,7 +27,9 @@ def _coerce_str_list(val: Any) -> List[str]:
     return []
 
 
-def _build_run_config(options: Dict[str, Any], verbose: bool) -> Dict[str, Any]:
+def _build_run_config(
+    options: Dict[str, Any], verbose: bool, quiet: bool
+) -> Dict[str, Any]:
     source_module = _coerce_str_list(options.get("source_module"))
     rules = options.get("rules") or {}
     linear = rules.get("linear") if isinstance(rules, dict) else None
@@ -36,6 +38,7 @@ def _build_run_config(options: Dict[str, Any], verbose: bool) -> Dict[str, Any]:
     run_cfg: Dict[str, Any] = {
         "source_module": source_module,
         "verbose": bool(verbose),
+        "quiet": bool(quiet),
     }
     if order:
         run_cfg["rules"] = {"linear": {"order": order}}
@@ -44,7 +47,9 @@ def _build_run_config(options: Dict[str, Any], verbose: bool) -> Dict[str, Any]:
     return run_cfg
 
 
-def run_check(config: ImporteeConfig, verbose: bool = False) -> List[Issue]:
+def run_check(
+    config: ImporteeConfig, verbose: bool = False, quiet: bool = False
+) -> List[Issue]:
     # Defer heavy lifting to Rust extension
     try:
         from . import _rust
@@ -61,7 +66,7 @@ def run_check(config: ImporteeConfig, verbose: bool = False) -> List[Issue]:
         "dependencies": [],
     }
 
-    run_cfg = _build_run_config(config.options, verbose)
+    run_cfg = _build_run_config(config.options, verbose, quiet)
 
     result_json = _rust.check_imports(json.dumps(project_cfg), json.dumps(run_cfg))
     # The Rust currently prints diagnostics and returns an empty issues list

@@ -28,12 +28,6 @@ def cli() -> None:
     help="Target directory to analyze",
 )
 @click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    help="Verbose output",
-)
-@click.option(
     "--config",
     type=click.Path(
         path_type=pathlib.Path,
@@ -44,10 +38,26 @@ def cli() -> None:
     ),
     help="Config file to use",
 )
-def check_cmd(target_path: pathlib.Path, config: pathlib.Path, verbose: bool) -> None:
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Quiet output (only issues)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Verbose output",
+)
+def check_cmd(
+    target_path: pathlib.Path, config: pathlib.Path, quiet: bool, verbose: bool
+) -> None:
     """Scan a directory for invalid imports."""
+    if verbose and quiet:
+        raise click.UsageError("--quiet and --verbose are mutually exclusive")
     cfg = discover_config(target_path, config)
-    issues = run_check(cfg, verbose)
+    issues = run_check(cfg, verbose, quiet)
     if issues:
         for issue in issues:
             click.echo(str(issue), err=True)

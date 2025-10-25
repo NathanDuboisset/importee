@@ -10,6 +10,7 @@ pub struct RunConfig {
     pub source_module: Vec<String>,
     pub rules: Option<RulesConfig>,
     pub verbose: Option<bool>,
+    pub quiet: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
