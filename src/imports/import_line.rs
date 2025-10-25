@@ -1,128 +1,97 @@
-use crate::imports::base::get_relative_path;
-use once_cell::sync::Lazy;
-use regex::Regex;
+use crate::module_path::ModulePath;
+use rustpython_ast::{Mod, Stmt};
+use rustpython_parser::{parse, Mode};
+use std::fmt;
 use std::fs;
-use std::path::Path;
 
 #[derive(Debug)]
 pub struct ImportLine {
-    pub from_file: Vec<String>,
-    pub target_file: Vec<String>,
+    pub from_module: ModulePath,
+    pub target_module: ModulePath,
     pub import_line: i32,
 }
 
-static RE_FROM: Lazy<Regex> = Lazy::new(|| {
-    // Matches: from pkg.sub import a, b as c
-    // Captures module in group 1 and imported list in group 2
-    Regex::new(r"^from\s+([^\s]+)\s+import\s+(.+)$").unwrap()
-});
+// AST-based import collection
 
-static RE_IMPORT: Lazy<Regex> = Lazy::new(|| {
-    // Matches: import a, b as c
-    // Captures imported list in group 1
-    Regex::new(r"^import\s+(.+)$").unwrap()
-});
-
-pub fn print_import_line(line: &ImportLine) {
-    let from = if line.from_file.is_empty() {
-        String::from("<unknown>")
-    } else {
-        line.from_file.join(".")
-    };
-    let target = if line.target_file.is_empty() {
-        String::from("<unknown>")
-    } else {
-        line.target_file.join(".")
-    };
-    println!("line {}: {} -> {}", line.import_line, from, target);
+impl fmt::Display for ImportLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let from = if self.from_module.is_empty() {
+            String::from("<unknown>")
+        } else {
+            self.from_module.to_dotted()
+        };
+        let target = if self.target_module.is_empty() {
+            String::from("<unknown>")
+        } else {
+            self.target_module.to_dotted()
+        };
+        write!(f, "line {}: {} -> {}", self.import_line, from, target)
+    }
 }
 
-pub fn get_file_imports_from_path(file_path: &Path) -> Vec<ImportLine> {
-    let file_content = match fs::read_to_string(file_path) {
+/// Parse imports for a module identified by its ModulePath. This preserves the full dotted path
+/// for `from_module` instead of only using the file's stem.
+pub fn get_file_imports_for_module(module: &ModulePath) -> Vec<ImportLine> {
+    let file_path = module.file_path();
+    let file_content = match fs::read_to_string(&file_path) {
         Ok(content) => content,
-        Err(_) => String::new(),
+        Err(_) => return Vec::new(),
+    };
+
+    let ast = match parse(&file_content, Mode::Module, &file_path.to_string_lossy()) {
+        Ok(suite) => suite,
+        Err(_) => return Vec::new(),
     };
 
     let mut results: Vec<ImportLine> = Vec::new();
 
-    // Determine current module name (file stem without extension)
-    let current_module: String = file_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
+    let body: &[Stmt] = match &ast {
+        Mod::Module(m) => &m.body,
+        _ => &[],
+    };
 
-    for (idx, raw_line) in file_content.lines().enumerate() {
-        let line_no_comments = raw_line.split('#').next().unwrap_or("");
-        let line = line_no_comments.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Some(caps) = RE_FROM.captures(line) {
-            let module = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-            // New semantics: target is the module path being imported from (split by '.')
-            let target_tokens: Vec<String> = if module.is_empty() {
-                Vec::new()
-            } else {
-                module
-                    .split('.')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect()
-            };
-
-            results.push(ImportLine {
-                from_file: if current_module.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![current_module.clone()]
-                },
-                target_file: target_tokens,
-                import_line: (idx + 1) as i32,
-            });
-        } else if let Some(caps) = RE_IMPORT.captures(line) {
-            let list = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-            for part in list.split(',') {
-                let name = part.trim();
-                if name.is_empty() {
-                    continue;
-                }
-                // Drop alias after "as"
-                let tokens_ws = name.split_whitespace().collect::<Vec<_>>();
-                let cleaned = if let Some(pos) = tokens_ws.iter().position(|&t| t == "as") {
-                    tokens_ws[..pos].join(" ")
-                } else {
-                    name.to_string()
-                };
-                if cleaned.is_empty() {
-                    continue;
-                }
-
-                let target_tokens: Vec<String> = cleaned
-                    .split('.')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect();
-
-                results.push(ImportLine {
-                    from_file: if current_module.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![current_module.clone()]
-                    },
-                    target_file: target_tokens,
-                    import_line: (idx + 1) as i32,
-                });
-            }
-        }
+    for stmt in body.iter() {
+        collect_imports_from_stmt(stmt, module, &mut results);
     }
 
     results
 }
 
-pub fn get_file_imports(module_path: Vec<String>) -> Vec<ImportLine> {
-    let relative_path = get_relative_path(module_path);
-    let file_path = Path::new(&relative_path);
-    get_file_imports_from_path(file_path)
+fn collect_imports_from_stmt(stmt: &Stmt, current_module: &ModulePath, out: &mut Vec<ImportLine>) {
+    match stmt {
+        Stmt::Import(inner) => {
+            let line_no: i32 = 0;
+            for alias in &inner.names {
+                let target_module = ModulePath::from_dotted(&alias.name.to_string());
+                out.push(ImportLine {
+                    from_module: current_module.clone(),
+                    target_module,
+                    import_line: line_no,
+                });
+            }
+        }
+        Stmt::ImportFrom(inner) => {
+            // Maintain previous behavior: one entry per 'from ... import ...', targeting the module only
+            let level: usize = if inner.level.is_some() { 1 } else { 0 };
+            let dots = ".".repeat(level);
+            let module_name = inner
+                .module
+                .as_ref()
+                .map(|m| m.to_string())
+                .unwrap_or_else(String::new);
+            let spec = format!("{}{}", dots, module_name);
+            let target_module = if spec.is_empty() {
+                ModulePath::default()
+            } else {
+                ModulePath::from_import(current_module, &spec)
+            };
+            let line_no: i32 = 0;
+            out.push(ImportLine {
+                from_module: current_module.clone(),
+                target_module,
+                import_line: line_no,
+            });
+        }
+        _ => {}
+    }
 }

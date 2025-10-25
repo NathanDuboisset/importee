@@ -67,7 +67,12 @@ impl ImportRule for LinearOrderInFolder {
             return true;
         }
 
-        let target_head = import.target_file.first().map(|s| s.as_str()).unwrap_or("");
+        let target_head = import
+            .target_module
+            .segments()
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("");
         if target_head.is_empty() {
             if self.verbose {
                 println!("[linear] skip: empty target_head");

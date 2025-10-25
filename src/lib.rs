@@ -1,41 +1,59 @@
 use pyo3::prelude::*;
 // use serde::{Deserialize, Serialize};
 
+mod classification;
 mod configs;
 mod imports;
+mod module_path;
 mod results;
 mod rules;
 
-use crate::imports::import_line::{get_file_imports_from_path, print_import_line};
+use crate::imports::import_line::get_file_imports_for_module;
+use crate::module_path::ModulePath;
+use classification::ImportResolver;
 use configs::{ProjectConfig, RunConfig};
-use results::CheckResult;
+use results::{CheckResult, Issue};
 use std::fs;
-use std::path::Path;
 
 fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> CheckResult {
     // Debug: process only the configured source module file if provided
+    let mut result = CheckResult::new();
     if !run_config.source_module.is_empty() {
-        let relative_path =
-            crate::imports::base::get_relative_path(run_config.source_module.clone());
-        let init_path_buf = format!("{}{}", &relative_path, "__init__.py");
-        let file_path_buf = format!("{}{}.py", &relative_path, "");
-        let init_path = Path::new(&init_path_buf);
-        let file_path = Path::new(&file_path_buf);
-        let chosen = if init_path.is_file() {
-            init_path
-        } else {
-            file_path
-        };
+        let tokens = run_config.source_module.clone();
+        let module_path = ModulePath::new(tokens.clone());
+        let dir_path = module_path.to_dir_pathbuf();
         if run_config.verbose.unwrap_or(false) {
             println!(
-                "[core] source_module={:?} resolved init={} file={} chosen={}",
-                run_config.source_module,
-                init_path.to_string_lossy(),
-                file_path.to_string_lossy(),
-                chosen.to_string_lossy()
+                "[core] source_module={:?} dir_path={}",
+                tokens,
+                dir_path.to_string_lossy()
             );
         }
-        process_file_or_dir(chosen, &run_config);
+        if dir_path.is_dir() {
+            if run_config.verbose.unwrap_or(false) {
+                println!("[core] walking directory {}", dir_path.to_string_lossy());
+            }
+            let resolver = ImportResolver::new(dir_path);
+            process_file_or_dir(&module_path, &run_config, &mut result, &resolver);
+        } else if let Some((_leaf, _head)) = tokens.split_last() {
+            let file_path = module_path.file_path();
+            if run_config.verbose.unwrap_or(false) {
+                println!(
+                    "[core] dir missing; try file {} (parent={:?})",
+                    file_path.to_string_lossy(),
+                    _head
+                );
+            }
+            let resolver = ImportResolver::new(
+                file_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf(),
+            );
+            process_file_or_dir(&module_path, &run_config, &mut result, &resolver);
+        } else if run_config.verbose.unwrap_or(false) {
+            println!("[core] empty source_module tokens; nothing to do");
+        }
     } else if let Ok(cwd) = std::env::current_dir() {
         if run_config.verbose.unwrap_or(false) {
             println!(
@@ -43,53 +61,138 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
                 cwd.to_string_lossy()
             );
         }
-        walk_and_print_py_imports(&cwd, &run_config);
+        // Start walking from cwd as a ModulePath (empty path represents cwd root)
+        let resolver = ImportResolver::new(&cwd);
+        walk_and_print_py_imports(
+            &ModulePath::new(vec![]),
+            &run_config,
+            &mut result,
+            &resolver,
+        );
     }
-    CheckResult::new()
+    result
 }
 
-fn walk_and_print_py_imports(dir: &Path, run_config: &RunConfig) {
-    let entries = match fs::read_dir(dir) {
+fn walk_and_print_py_imports(
+    dir: &ModulePath,
+    run_config: &RunConfig,
+    result: &mut CheckResult,
+    resolver: &ImportResolver,
+) {
+    let entries = match fs::read_dir(dir.to_dir_pathbuf()) {
         Ok(read_dir) => read_dir,
         Err(_) => return,
     };
 
     for entry in entries.flatten() {
+        let file_name_os = entry.file_name();
+        let file_name = file_name_os.to_string_lossy();
         let path = entry.path();
-        if path.is_dir() {
-            walk_and_print_py_imports(&path, run_config);
+
+        // Skip Python cache directories explicitly
+        if path.is_dir() && file_name == "__pycache__" {
             continue;
         }
 
-        if path.extension().and_then(|e| e.to_str()) == Some("py") {
-            process_file_or_dir(&path, run_config);
+        if path.is_dir() {
+            let new_module_path = dir.append(file_name.to_string());
+            walk_and_print_py_imports(&new_module_path, run_config, result, resolver);
+        } else if path.is_file() {
+            // Only process .py files; ignore .pyi, .pyc, .so, etc.
+            if path.extension().and_then(|e| e.to_str()) != Some("py") {
+                continue;
+            }
+            // Append stem (module name without extension) to ModulePath
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let new_module_path = dir.append(stem);
+            process_file_or_dir(&new_module_path, run_config, result, resolver);
         }
     }
 }
 
-fn process_file_or_dir(path: &Path, run_config: &RunConfig) {
-    if path.is_dir() {
+fn process_file_or_dir(
+    module_path: &ModulePath,
+    run_config: &RunConfig,
+    result: &mut CheckResult,
+    resolver: &ImportResolver,
+) {
+    if module_path.to_dir_pathbuf().is_dir() {
         if run_config.verbose.unwrap_or(false) {
-            println!("[core] recurse into dir {}", path.to_string_lossy());
+            println!("[core] recurse into dir {}", module_path.to_dotted());
         }
-        walk_and_print_py_imports(path, run_config);
+        walk_and_print_py_imports(module_path, run_config, result, resolver);
         return;
     }
     let rules = rules::build_rules(run_config);
-    let imports = get_file_imports_from_path(path);
+    let imports = get_file_imports_for_module(module_path)
+        .into_iter()
+        .filter(|imp| {
+            // Only keep imports whose target is local to the project root
+            // Absolute external imports (e.g., __future__, typing) are filtered out
+            resolver.is_local_module(&imp.target_module)
+        })
+        .collect::<Vec<_>>();
     if !imports.is_empty() {
-        if let Some(p) = path.to_str() {
-            println!("=== {} ===", p);
-        }
+        println!("=== {} ===", module_path.to_dotted());
         for imp in imports.iter() {
-            print_import_line(imp);
+            println!("{}", imp);
             for rule in rules.iter() {
-                let ok = rule.check_line(path, imp);
+                let ok = rule.check_line(&module_path.file_path(), imp);
                 println!("  rule {}: {}", rule.name(), if ok { "ok" } else { "FAIL" });
+                if !ok {
+                    let message = if rule.name() == "linear_order_in_folder" {
+                        let from = if imp.from_module.is_empty() {
+                            String::from("<unknown>")
+                        } else {
+                            imp.from_module.to_dotted()
+                        };
+                        let target = if imp.target_module.is_empty() {
+                            String::from("<unknown>")
+                        } else {
+                            imp.target_module.to_dotted()
+                        };
+                        let folder = if run_config.source_module.is_empty() {
+                            String::from("<unknown>")
+                        } else {
+                            crate::module_path::ModulePath::new(run_config.source_module.clone())
+                                .to_dotted()
+                        };
+                        let expected_order = if let Some(r) = &run_config.rules {
+                            if let Some(linear) = &r.linear {
+                                if linear.order.is_empty() {
+                                    String::from("<unspecified>")
+                                } else {
+                                    linear.order.join(" -> ")
+                                }
+                            } else {
+                                String::from("<unspecified>")
+                            }
+                        } else {
+                            String::from("<unspecified>")
+                        };
+                        format!(
+                            "linear_order_in_folder: line {}: import {} -> {} breaks order in module {}. Expected order: {}",
+                            imp.import_line, from, target, folder, expected_order
+                        )
+                    } else {
+                        format!("rule '{}' failed at line {}", rule.name(), imp.import_line)
+                    };
+
+                    result.issues.push(Issue {
+                        path: module_path.file_path().to_string_lossy().to_string(),
+                        message,
+                    });
+                }
             }
         }
     } else if run_config.verbose.unwrap_or(false) {
-        println!("[core] no imports found in {}", path.to_string_lossy());
+        println!(
+            "[core] no imports found in {}",
+            module_path.file_path().to_string_lossy()
+        );
     }
 }
 

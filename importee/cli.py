@@ -29,6 +29,7 @@ def cli() -> None:
 )
 @click.option(
     "--verbose",
+    "-v",
     is_flag=True,
     help="Verbose output",
 )
