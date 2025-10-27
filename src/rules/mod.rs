@@ -8,6 +8,8 @@ pub mod linear;
 pub trait ImportRule {
     fn name(&self) -> &'static str;
     fn check_line(&self, current_file: &Path, import: &ImportLine) -> bool;
+    /// Human-readable summary of this rule's configuration for display.
+    fn describe(&self) -> String;
 }
 
 pub fn build_rules(config: &RunConfig) -> Vec<Box<dyn ImportRule>> {

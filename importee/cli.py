@@ -62,7 +62,8 @@ def check_cmd(
         for issue in issues:
             click.echo(str(issue), err=True)
         sys.exit(1)
-    click.echo("No issues found.")
+    if not quiet:
+        click.echo("No issues found.")
 
 
 if __name__ == "__main__":  # pragma: no cover

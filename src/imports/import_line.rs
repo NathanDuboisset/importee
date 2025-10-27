@@ -1,3 +1,5 @@
+use crate::configs::RunConfig;
+use crate::imports::classification::ImportResolver;
 use crate::module_path::ModulePath;
 use rustpython_ast::{Mod, Stmt};
 use rustpython_parser::{parse, Mode};
@@ -31,7 +33,11 @@ impl fmt::Display for ImportLine {
 
 /// Parse imports for a module identified by its ModulePath. This preserves the full dotted path
 /// for `from_module` instead of only using the file's stem.
-pub fn get_file_imports_for_module(module: &ModulePath) -> Vec<ImportLine> {
+pub fn get_file_imports_for_module(
+    module: &ModulePath,
+    resolver: &ImportResolver,
+    run_config: &RunConfig,
+) -> Vec<ImportLine> {
     let file_path = module.file_path();
     let file_content = match fs::read_to_string(&file_path) {
         Ok(content) => content,
@@ -51,107 +57,136 @@ pub fn get_file_imports_for_module(module: &ModulePath) -> Vec<ImportLine> {
     };
 
     for stmt in body.iter() {
-        collect_imports_deep(stmt, module, &mut results);
+        collect_imports_deep(stmt, module, resolver, &mut results, run_config);
     }
 
     results
 }
 
-fn collect_imports_from_stmt(stmt: &Stmt, current_module: &ModulePath, out: &mut Vec<ImportLine>) {
+fn collect_imports_from_stmt(
+    stmt: &Stmt,
+    current_module: &ModulePath,
+    resolver: &ImportResolver,
+    out: &mut Vec<ImportLine>,
+    run_config: &RunConfig,
+) {
+    let mut base: Option<String> = None;
+    let line_no: i32 = 0;
+
     match stmt {
         Stmt::Import(inner) => {
-            let line_no: i32 = 0;
-            for alias in &inner.names {
-                let target_module = ModulePath::from_dotted(&alias.name.to_string());
-                out.push(ImportLine {
-                    from_module: current_module.clone(),
-                    target_module,
-                    import_line: line_no,
-                });
+            if let Some(alias) = inner.names.first() {
+                base = Some(alias.name.to_string());
             }
         }
         Stmt::ImportFrom(inner) => {
-            // Build spec: treat as relative ONLY when there is a level and no module name
-            // (avoids misclassifying absolute imports with explicit level=0)
-            let is_relative_no_module = inner.level.is_some() && inner.module.is_none();
-            let dots = if is_relative_no_module {
-                String::from(".")
-            } else {
-                String::new()
-            };
+            // Prefer the module; only use relative dots when module is missing
             let module_name = inner
                 .module
                 .as_ref()
                 .map(|m| m.to_string())
-                .unwrap_or_else(String::new);
-            let spec = format!("{}{}", dots, module_name);
-            let target_module = if spec.is_empty() {
-                ModulePath::default()
-            } else {
-                ModulePath::from_import(current_module, &spec)
-            };
-            let line_no: i32 = 0;
-            out.push(ImportLine {
-                from_module: current_module.clone(),
-                target_module,
-                import_line: line_no,
-            });
+                .unwrap_or_default();
+            if !module_name.is_empty() {
+                // If first alias is a submodule that exists, prefer pkg.alias; else pkg
+                if let Some(first) = inner.names.first() {
+                    let try_sub = format!("{}.{}", module_name, first.name);
+                    let resolved_try = resolver.resolve_import(current_module, &try_sub);
+                    if resolver.is_local_module(&resolved_try) {
+                        base = Some(try_sub);
+                    } else {
+                        base = Some(module_name);
+                    }
+                } else {
+                    base = Some(module_name);
+                }
+            } else if let Some(first) = inner.names.first() {
+                let dots = if inner.level.is_some() {
+                    String::from(".")
+                } else {
+                    String::new()
+                };
+                base = Some(format!("{}{}", dots, first.name));
+            }
         }
         _ => {}
     }
+
+    if let Some(base_spec) = base {
+        if run_config.verbose.unwrap_or(false) {
+            println!(
+                "[collect] from={} base={}",
+                current_module.to_dotted(),
+                base_spec
+            );
+        }
+        let resolved = resolver.resolve_import(current_module, &base_spec);
+        if resolver.is_local_module(&resolved) {
+            out.push(ImportLine {
+                from_module: current_module.clone(),
+                target_module: resolved,
+                import_line: line_no,
+            });
+        }
+    }
 }
 
-fn collect_imports_deep(stmt: &Stmt, current_module: &ModulePath, out: &mut Vec<ImportLine>) {
-    collect_imports_from_stmt(stmt, current_module, out);
+fn collect_imports_deep(
+    stmt: &Stmt,
+    current_module: &ModulePath,
+    resolver: &ImportResolver,
+    out: &mut Vec<ImportLine>,
+    run_config: &RunConfig,
+) {
+    collect_imports_from_stmt(stmt, current_module, resolver, out, run_config);
     match stmt {
         Stmt::FunctionDef(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         Stmt::ClassDef(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         Stmt::If(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
             for s in inner.orelse.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         Stmt::With(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         Stmt::For(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
             for s in inner.orelse.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         Stmt::While(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
             for s in inner.orelse.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         Stmt::Try(inner) => {
             for s in inner.body.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
             for s in inner.orelse.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
             for s in inner.finalbody.iter() {
-                collect_imports_deep(s, current_module, out);
+                collect_imports_deep(s, current_module, resolver, out, run_config);
             }
         }
         _ => {}

@@ -67,12 +67,20 @@ impl ImportRule for LinearOrderInFolder {
             return true;
         }
 
-        let target_head = import
-            .target_module
-            .segments()
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        // Determine target head relative to the configured source_folder.
+        // Example: source_folder=["importee"], target_module=["importee","config"] => "config"
+        let target_segments = import.target_module.segments();
+        let target_head = if target_segments.len() >= self.source_folder.len() + 1
+            && target_segments
+                .iter()
+                .take(self.source_folder.len())
+                .map(|s| s.as_str())
+                .eq(self.source_folder.iter().map(|s| s.as_str()))
+        {
+            target_segments[self.source_folder.len()].as_str()
+        } else {
+            target_segments.first().map(|s| s.as_str()).unwrap_or("")
+        };
         if target_head.is_empty() {
             if self.verbose {
                 println!("[linear] skip: empty target_head");
@@ -82,15 +90,35 @@ impl ImportRule for LinearOrderInFolder {
         let me_opt = self.order_index.get(current_module).copied();
         let other_opt = self.order_index.get(target_head).copied();
         let pass = match (me_opt, other_opt) {
-            (Some(me), Some(other)) => other >= me,
+            (Some(me), Some(other)) => other <= me,
             _ => true,
         };
         if self.verbose {
             println!(
-                "[linear] cur={} tgt={} me_idx={:?} other_idx={:?} pass={}",
+                "[linear] source={} target={} source_idx={:?} other_idx={:?} pass={}",
                 current_module, target_head, me_opt, other_opt, pass
             );
         }
         pass
+    }
+
+    fn describe(&self) -> String {
+        let folder = if self.source_folder.is_empty() {
+            String::from("<unknown>")
+        } else {
+            self.source_folder.join(".")
+        };
+        let mut ordered: Vec<(&String, &usize)> = self.order_index.iter().collect();
+        ordered.sort_by_key(|(_, idx)| **idx);
+        let order = if ordered.is_empty() {
+            String::from("<unspecified>")
+        } else {
+            ordered
+                .into_iter()
+                .map(|(k, _)| k.clone())
+                .collect::<Vec<String>>()
+                .join(" -> ")
+        };
+        format!("folder={} order={}", folder, order)
     }
 }

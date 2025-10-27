@@ -39,4 +39,4 @@ source_module = ["importee"]
 [tool.importee.rules]
 
 [tool.importee.rules.linear]
-order = ["rules", "config", "api"]
+order = ["rules", "config","checker", "api"]

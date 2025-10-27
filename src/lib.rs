@@ -13,10 +13,12 @@ use crate::module_path::ModulePath;
 use configs::{ProjectConfig, RunConfig};
 use results::{CheckResult, Issue};
 use std::fs;
+use std::io::{self, Write};
 
 fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> CheckResult {
     // Debug: process only the configured source module file if provided
     let mut result = CheckResult::new();
+
     if !run_config.source_module.is_empty() {
         let tokens = run_config.source_module.clone();
         let module_path = ModulePath::new(tokens.clone());
@@ -27,13 +29,19 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
                 tokens,
                 dir_path.to_string_lossy()
             );
+            println!("[core] active rules:");
+            let rules = rules::build_rules(&run_config);
+            for rule in rules.iter() {
+                println!("  - {}: {}", rule.name(), rule.describe());
+            }
         }
         if dir_path.is_dir() {
             if run_config.verbose.unwrap_or(false) {
                 println!("[core] walking directory {}", dir_path.to_string_lossy());
             }
             let root_module = tokens.first().cloned();
-            let resolver = ImportResolver::new(dir_path, root_module);
+            let resolver =
+                ImportResolver::new(dir_path, root_module, run_config.verbose.unwrap_or(false));
             process_file_or_dir(&module_path, &run_config, &mut result, &resolver);
         } else if let Some((_leaf, _head)) = tokens.split_last() {
             let file_path = module_path.file_path();
@@ -50,6 +58,7 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .to_path_buf(),
                 tokens.first().cloned(),
+                run_config.verbose.unwrap_or(false),
             );
             process_file_or_dir(&module_path, &run_config, &mut result, &resolver);
         } else if run_config.verbose.unwrap_or(false) {
@@ -63,7 +72,7 @@ fn run_check_imports(_project_config: ProjectConfig, run_config: RunConfig) -> C
             );
         }
         // Start walking from cwd as a ModulePath (empty path represents cwd root)
-        let resolver = ImportResolver::new(&cwd, None);
+        let resolver = ImportResolver::new(&cwd, None, run_config.verbose.unwrap_or(false));
         walk_and_print_py_imports(
             &ModulePath::new(vec![]),
             &run_config,
@@ -127,9 +136,14 @@ fn process_file_or_dir(
         walk_and_print_py_imports(module_path, run_config, result, resolver);
         return;
     }
+    // Always print file header in normal/verbose; quiet suppresses output
+    if !run_config.quiet.unwrap_or(false) {
+        println!("=== {} ===", module_path.file_path().to_string_lossy());
+    }
+    let _ = io::stdout().flush();
     let rules = rules::build_rules(run_config);
     let mut imports = Vec::new();
-    for imp in get_file_imports_for_module(module_path).into_iter() {
+    for imp in get_file_imports_for_module(module_path, resolver, run_config).into_iter() {
         let (is_local, reason) = resolver.classify_module(&imp.target_module);
         if is_local {
             imports.push(imp);
@@ -143,9 +157,7 @@ fn process_file_or_dir(
         }
     }
     // Print file visited for normal/verbose modes
-    if !run_config.quiet.unwrap_or(false) {
-        println!("=== {} ===", module_path.to_dotted());
-    }
+    // Dotted name remains available via verbose/external output
 
     for imp in imports.iter() {
         if run_config.verbose.unwrap_or(false) {
