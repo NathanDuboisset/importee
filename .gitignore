@@ -5,6 +5,8 @@
  
 # Python cache/artifacts
 __pycache__/
+**/__pycache__/
+importee/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -47,3 +49,5 @@ target/wheels/
 /importee/_rust*.so
 /importee/_rust*.pyd
 /importee/_rust.pyi
+importee/_rust*.so
+importee/_rust.*.so
