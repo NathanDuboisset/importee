@@ -86,14 +86,14 @@ fn try_load_cache(
     Some(out)
 }
 
-fn ensure_cache_dir_with_gitignore(cache_root: &Path) {
+fn ensure_cache_dir(cache_root: &Path) {
     // Create cache directory if it doesn't exist
-    if !cache_root.exists() {
-        if fs::create_dir_all(cache_root).is_ok() {
-            // Immediately add .gitignore with * to ignore all cache files
-            let gitignore_path = cache_root.join(".gitignore");
-            let _ = fs::write(gitignore_path, "*\n");
-        }
+    let _ = fs::create_dir_all(cache_root);
+
+    // Ensure .gitignore exists with * to ignore all cache files
+    let gitignore_path = cache_root.join(".gitignore");
+    if !gitignore_path.exists() {
+        let _ = fs::write(gitignore_path, "*\n");
     }
 }
 
@@ -107,11 +107,11 @@ fn save_cache(
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    
+
     // Ensure cache root directory has .gitignore
     let project_root = find_project_root(resolver.root_dir());
     let cache_root = project_root.join(".importee_cache");
-    ensure_cache_dir_with_gitignore(&cache_root);
+    ensure_cache_dir(&cache_root);
     let flat: Vec<(String, i32)> = imports
         .iter()
         .map(|imp| (imp.target_module.to_dotted(), imp.import_line))
