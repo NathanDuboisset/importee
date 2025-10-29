@@ -1,3 +1,7 @@
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+
 /// Utilities for representing and manipulating dotted Python-like module paths.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModulePath {
@@ -24,6 +28,28 @@ impl ModulePath {
     /// Format as dotted identifier string (e.g., "foo.bar").
     pub fn to_dotted(&self) -> String {
         self.segments.join(".")
+    }
+
+    /// Whether this ModulePath starts with the given base path.
+    pub fn starts_with(&self, base: &ModulePath) -> bool {
+        if base.segments.len() > self.segments.len() {
+            return false;
+        }
+        self.segments
+            .iter()
+            .zip(base.segments.iter())
+            .all(|(a, b)| a == b)
+    }
+
+    /// Return the relative ModulePath by stripping the given base prefix.
+    /// Example: self="importee.path.api", base="importee" => Some("path.api").
+    /// If `self` doesn't start with `base`, returns None.
+    pub fn relative_from(&self, base: &ModulePath) -> Option<ModulePath> {
+        if !self.starts_with(base) {
+            return None;
+        }
+        let rest = self.segments[base.segments.len()..].to_vec();
+        Some(ModulePath::new(rest))
     }
 
     /// Build a PathBuf corresponding to this module as a directory path.
@@ -101,6 +127,72 @@ impl ModulePath {
             );
         }
         ModulePath::new(segments)
+    }
+}
+
+impl Serialize for ModulePath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_dotted())
+    }
+}
+
+impl<'de> Deserialize<'de> for ModulePath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ModulePathVisitor;
+        impl<'de> Visitor<'de> for ModulePathVisitor {
+            type Value = ModulePath;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter
+                    .write_str("a dotted string, array of segments, or an object with 'segments'")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ModulePath::from_dotted(value))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut segments: Vec<String> = Vec::new();
+                while let Some(elem) = seq.next_element::<String>()? {
+                    if !elem.is_empty() {
+                        segments.push(elem);
+                    }
+                }
+                Ok(ModulePath::new(segments))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut segments: Option<Vec<String>> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "segments" => {
+                            segments = Some(map.next_value::<Vec<String>>()?);
+                        }
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(ModulePath::new(segments.unwrap_or_default()))
+            }
+        }
+
+        deserializer.deserialize_any(ModulePathVisitor)
     }
 }
 

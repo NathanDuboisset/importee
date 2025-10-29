@@ -7,7 +7,9 @@ pub struct CheckResult {
 
 #[derive(Serialize, Debug)]
 pub struct Issue {
+    pub rule_name: String,
     pub path: String,
+    pub line: i32,
     pub message: String,
 }
 

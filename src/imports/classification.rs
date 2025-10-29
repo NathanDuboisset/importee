@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use crate::module_path::ModulePath;
@@ -20,6 +20,11 @@ impl ImportResolver {
             root_module,
             verbose,
         }
+    }
+
+    /// Project root directory for resolution (used for caching paths and lookups)
+    pub fn root_dir(&self) -> &Path {
+        &self.root_dir
     }
 
     /// Returns true if the dotted module path exists under the configured root directory,
