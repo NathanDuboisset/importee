@@ -9,165 +9,125 @@ use crate::file_processor::process_file;
 
 pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -> CheckResult {
     let mut result = CheckResult::new();
-    let mut walked_any = false;
-    if !project_config.source_modules.is_empty() {
-        for module_path in project_config.source_modules.iter().cloned() {
-            let dir_path = module_path.to_dir_pathbuf();
+
+    // Determine sources: use source_modules or fallback to cwd
+    let sources: Vec<ModulePath> = if !project_config.source_modules.is_empty() {
+        project_config.source_modules.clone()
+    } else {
+        vec![ModulePath::new(vec![])] // empty path represents cwd root
+    };
+
+    // Print active rules once if verbose
+    if run_config.verbose.unwrap_or(false) {
+        println!("[core] active rules:");
+        let rules = crate::rules::build_rules(&project_config, &run_config);
+        for rule in rules.iter() {
+            println!("  - {}: {}", rule.name(), rule.describe());
+        }
+    }
+
+    // Walk each source in parallel
+    let all_issues: Vec<Issue> = sources
+        .par_iter()
+        .flat_map(|module_path| {
             if run_config.verbose.unwrap_or(false) {
                 println!(
-                    "[core] source_module={} dir_path={}",
+                    "[core] walking {} ({})",
                     module_path.to_dotted(),
-                    dir_path.to_string_lossy()
-                );
-                println!("[core] active rules:");
-                let rules = crate::rules::build_rules(&project_config, &run_config);
-                for rule in rules.iter() {
-                    println!("  - {}: {}", rule.name(), rule.describe());
-                }
-            }
-            if dir_path.is_dir() {
-                if run_config.verbose.unwrap_or(false) {
-                    println!("[core] walking directory {}", dir_path.to_string_lossy());
-                }
-                let root_module = module_path.segments().first().cloned();
-                let resolver =
-                    ImportResolver::new(dir_path, root_module, run_config.verbose.unwrap_or(false));
-                walk_dirs(
-                    &module_path,
-                    &project_config,
-                    &run_config,
-                    &mut result,
-                    &resolver,
-                );
-                walked_any = true;
-            } else if let Some((_leaf, _head)) = module_path.split_last() {
-                let file_path = module_path.file_path();
-                if run_config.verbose.unwrap_or(false) {
-                    println!(
-                        "[core] dir missing; try file {} (parent={:?})",
-                        file_path.to_string_lossy(),
-                        _head
-                    );
-                }
-                let resolver = ImportResolver::new(
-                    file_path
-                        .parent()
-                        .unwrap_or_else(|| std::path::Path::new("."))
-                        .to_path_buf(),
-                    module_path.segments().first().cloned(),
-                    run_config.verbose.unwrap_or(false),
-                );
-                process_file(
-                    &module_path,
-                    &project_config,
-                    &run_config,
-                    &mut result,
-                    &resolver,
-                );
-                walked_any = true;
-            } else if run_config.verbose.unwrap_or(false) {
-                println!("[core] empty source_module tokens; nothing to do");
-            }
-        }
-    }
-    if !walked_any {
-        if let Ok(cwd) = std::env::current_dir() {
-            if run_config.verbose.unwrap_or(false) {
-                println!(
-                    "[core] no source_module provided; walking cwd {}",
-                    cwd.to_string_lossy()
+                    module_path.to_dir_pathbuf().to_string_lossy()
                 );
             }
-            // Start walking from cwd as a ModulePath (empty path represents cwd root)
-            let resolver = ImportResolver::new(&cwd, None, run_config.verbose.unwrap_or(false));
-            println!("[core] active rules:");
-            let rules = crate::rules::build_rules(&project_config, &run_config);
-            for rule in rules.iter() {
-                println!("  - {}: {}", rule.name(), rule.describe());
-            }
-            walk_dirs(
-                &ModulePath::new(vec![]),
-                &project_config,
-                &run_config,
-                &mut result,
-                &resolver,
-            );
-        }
-    }
+
+            let root_module = module_path.segments().first().cloned();
+            let root_dir = if module_path.to_dir_pathbuf().is_dir() {
+                module_path.to_dir_pathbuf()
+            } else {
+                module_path
+                    .file_path()
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf()
+            };
+            let resolver =
+                ImportResolver::new(root_dir, root_module, run_config.verbose.unwrap_or(false));
+
+            walk_path_parallel(module_path, &project_config, &run_config, &resolver)
+        })
+        .collect();
+
+    result.issues.extend(all_issues);
     result
 }
 
-/// Recursively walk directories and process files in parallel
-fn walk_dirs_parallel(
-    dir: &ModulePath,
+/// Walk a path (file or directory) and process it in parallel
+fn walk_path_parallel(
+    path: &ModulePath,
     project_config: &ProjectConfig,
     run_config: &RunConfig,
     resolver: &ImportResolver,
 ) -> Vec<Issue> {
-    let entries = match fs::read_dir(dir.to_dir_pathbuf()) {
-        Ok(read_dir) => read_dir,
-        Err(_) => return Vec::new(),
-    };
+    let target = path.to_dir_pathbuf();
 
-    // Collect entries to process
-    let entries: Vec<_> = entries.flatten().collect();
+    // If it's a directory, walk it recursively
+    if target.is_dir() {
+        let entries = match fs::read_dir(&target) {
+            Ok(read_dir) => read_dir,
+            Err(_) => return Vec::new(),
+        };
 
-    // Process all entries in parallel
-    entries
-        .par_iter()
-        .flat_map(|entry| {
-            let file_name_os = entry.file_name();
-            let file_name = file_name_os.to_string_lossy();
-            let path = entry.path();
+        // Collect entries to process
+        let entries: Vec<_> = entries.flatten().collect();
 
-            // Skip Python cache directories explicitly
-            if path.is_dir() && file_name == "__pycache__" {
-                return Vec::new();
-            }
+        // Process all entries in parallel
+        entries
+            .par_iter()
+            .flat_map(|entry| {
+                let file_name_os = entry.file_name();
+                let file_name = file_name_os.to_string_lossy();
+                let entry_path = entry.path();
 
-            if path.is_dir() {
-                let new_module_path = dir.append(file_name.to_string());
-                // Recursively walk subdirectory in parallel
-                walk_dirs_parallel(&new_module_path, project_config, run_config, resolver)
-            } else if path.is_file() {
-                // Only process .py files; ignore .pyi, .pyc, .so, etc.
-                if path.extension().and_then(|e| e.to_str()) != Some("py") {
+                // Skip Python cache directories explicitly
+                if entry_path.is_dir() && file_name == "__pycache__" {
                     return Vec::new();
                 }
-                // Append stem (module name without extension) to ModulePath
-                let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                    Some(s) => s.to_string(),
-                    None => return Vec::new(),
-                };
-                let new_module_path = dir.append(stem);
 
-                // Process file and collect issues
-                let mut file_result = CheckResult::new();
-                process_file(
-                    &new_module_path,
-                    project_config,
-                    run_config,
-                    &mut file_result,
-                    resolver,
-                );
-                file_result.issues
-            } else {
-                Vec::new()
-            }
-        })
-        .collect()
-}
+                if entry_path.is_dir() {
+                    let new_module_path = path.append(file_name.to_string());
+                    // Recursively walk subdirectory in parallel
+                    walk_path_parallel(&new_module_path, project_config, run_config, resolver)
+                } else if entry_path.is_file() {
+                    // Only process .py files; ignore .pyi, .pyc, .so, etc.
+                    if entry_path.extension().and_then(|e| e.to_str()) != Some("py") {
+                        return Vec::new();
+                    }
+                    // Append stem (module name without extension) to ModulePath
+                    let stem = match entry_path.file_stem().and_then(|s| s.to_str()) {
+                        Some(s) => s.to_string(),
+                        None => return Vec::new(),
+                    };
+                    let new_module_path = path.append(stem);
 
-pub fn walk_dirs(
-    dir: &ModulePath,
-    project_config: &ProjectConfig,
-    run_config: &RunConfig,
-    result: &mut CheckResult,
-    resolver: &ImportResolver,
-) {
-    // Walk directories and process files in parallel
-    let issues = walk_dirs_parallel(dir, project_config, run_config, resolver);
-
-    // Aggregate all issues into the final result
-    result.issues.extend(issues);
+                    // Process file and collect issues
+                    let mut file_result = CheckResult::new();
+                    process_file(
+                        &new_module_path,
+                        project_config,
+                        run_config,
+                        &mut file_result,
+                        resolver,
+                    );
+                    file_result.issues
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect()
+    } else if target.is_file() || path.file_path().is_file() {
+        // It's a single file - process it directly
+        let mut file_result = CheckResult::new();
+        process_file(path, project_config, run_config, &mut file_result, resolver);
+        file_result.issues
+    } else {
+        Vec::new()
+    }
 }
