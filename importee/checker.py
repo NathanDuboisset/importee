@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import json
 import pathlib
+from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from .config import ImporteeConfig
 
 
+@dataclass
 class Issue:
-    def __init__(
-        self, rule_name: str, path: pathlib.Path, line: int, message: str
-    ) -> None:
-        self.rule_name = rule_name
-        self.path = path
-        self.line = int(line)
-        self.message = message
+    rule_name: str
+    path: pathlib.Path
+    line: int
+    message: str
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"{self.path}:{self.line}: {self.message}"

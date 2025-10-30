@@ -1,7 +1,8 @@
 use crate::configs::{ProjectConfig, RunConfig};
 use crate::imports::classification::ImportResolver;
 use crate::module_path::ModulePath;
-use crate::results::CheckResult;
+use crate::results::{CheckResult, Issue};
+use rayon::prelude::*;
 use std::fs;
 
 use crate::file_processor::process_file;
@@ -96,6 +97,67 @@ pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -
     result
 }
 
+/// Recursively walk directories and process files in parallel
+fn walk_dirs_parallel(
+    dir: &ModulePath,
+    project_config: &ProjectConfig,
+    run_config: &RunConfig,
+    resolver: &ImportResolver,
+) -> Vec<Issue> {
+    let entries = match fs::read_dir(dir.to_dir_pathbuf()) {
+        Ok(read_dir) => read_dir,
+        Err(_) => return Vec::new(),
+    };
+
+    // Collect entries to process
+    let entries: Vec<_> = entries.flatten().collect();
+
+    // Process all entries in parallel
+    entries
+        .par_iter()
+        .flat_map(|entry| {
+            let file_name_os = entry.file_name();
+            let file_name = file_name_os.to_string_lossy();
+            let path = entry.path();
+
+            // Skip Python cache directories explicitly
+            if path.is_dir() && file_name == "__pycache__" {
+                return Vec::new();
+            }
+
+            if path.is_dir() {
+                let new_module_path = dir.append(file_name.to_string());
+                // Recursively walk subdirectory in parallel
+                walk_dirs_parallel(&new_module_path, project_config, run_config, resolver)
+            } else if path.is_file() {
+                // Only process .py files; ignore .pyi, .pyc, .so, etc.
+                if path.extension().and_then(|e| e.to_str()) != Some("py") {
+                    return Vec::new();
+                }
+                // Append stem (module name without extension) to ModulePath
+                let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                    Some(s) => s.to_string(),
+                    None => return Vec::new(),
+                };
+                let new_module_path = dir.append(stem);
+
+                // Process file and collect issues
+                let mut file_result = CheckResult::new();
+                process_file(
+                    &new_module_path,
+                    project_config,
+                    run_config,
+                    &mut file_result,
+                    resolver,
+                );
+                file_result.issues
+            } else {
+                Vec::new()
+            }
+        })
+        .collect()
+}
+
 pub fn walk_dirs(
     dir: &ModulePath,
     project_config: &ProjectConfig,
@@ -103,48 +165,9 @@ pub fn walk_dirs(
     result: &mut CheckResult,
     resolver: &ImportResolver,
 ) {
-    let entries = match fs::read_dir(dir.to_dir_pathbuf()) {
-        Ok(read_dir) => read_dir,
-        Err(_) => return,
-    };
+    // Walk directories and process files in parallel
+    let issues = walk_dirs_parallel(dir, project_config, run_config, resolver);
 
-    for entry in entries.flatten() {
-        let file_name_os = entry.file_name();
-        let file_name = file_name_os.to_string_lossy();
-        let path = entry.path();
-
-        // Skip Python cache directories explicitly
-        if path.is_dir() && file_name == "__pycache__" {
-            continue;
-        }
-
-        if path.is_dir() {
-            let new_module_path = dir.append(file_name.to_string());
-            walk_dirs(
-                &new_module_path,
-                project_config,
-                run_config,
-                result,
-                resolver,
-            );
-        } else if path.is_file() {
-            // Only process .py files; ignore .pyi, .pyc, .so, etc.
-            if path.extension().and_then(|e| e.to_str()) != Some("py") {
-                continue;
-            }
-            // Append stem (module name without extension) to ModulePath
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            let new_module_path = dir.append(stem);
-            process_file(
-                &new_module_path,
-                project_config,
-                run_config,
-                result,
-                resolver,
-            );
-        }
-    }
+    // Aggregate all issues into the final result
+    result.issues.extend(issues);
 }

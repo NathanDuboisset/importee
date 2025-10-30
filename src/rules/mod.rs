@@ -16,6 +16,8 @@ pub trait ImportRule {
     fn check_line(&self, current_file: &Path, import: &ImportLine) -> RuleOutcome;
     /// Human-readable summary of this rule's configuration for display.
     fn describe(&self) -> String;
+    /// Check if the given module path is controlled/concerned by this rule.
+    fn check_concern(&self, module_path: &crate::module_path::ModulePath) -> bool;
 }
 
 pub fn build_rules(project: &ProjectConfig, config: &RunConfig) -> Vec<Box<dyn ImportRule>> {
