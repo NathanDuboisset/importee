@@ -10,16 +10,18 @@ pub struct ImportLine {
 
 impl fmt::Display for ImportLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let from = if self.from_module.is_empty() {
-            String::from("<unknown>")
-        } else {
-            self.from_module.to_dotted()
-        };
+        let filepath = self.from_module.file_path();
         let target = if self.target_module.is_empty() {
             String::from("<unknown>")
         } else {
             self.target_module.to_dotted()
         };
-        write!(f, "line {}: {} -> {}", self.import_line, from, target)
+        write!(
+            f,
+            "{}:{} imports {}",
+            filepath.display(),
+            self.import_line,
+            target
+        )
     }
 }

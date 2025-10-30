@@ -11,13 +11,14 @@ pub struct RuleOutcome {
     pub reason: String,
 }
 
-pub trait ImportRule {
+pub trait ImportRule: Sync {
     fn name(&self) -> &'static str;
     fn check_line(&self, current_file: &Path, import: &ImportLine) -> RuleOutcome;
     /// Human-readable summary of this rule's configuration for display.
     fn describe(&self) -> String;
     /// Check if the given module path is controlled/concerned by this rule.
-    fn check_concern(&self, module_path: &crate::module_path::ModulePath) -> bool;
+    /// If verbose is true, the rule should print debug info explaining why it's not concerned.
+    fn check_concern(&self, module_path: &crate::module_path::ModulePath, verbose: bool) -> bool;
 }
 
 pub fn build_rules(project: &ProjectConfig, config: &RunConfig) -> Vec<Box<dyn ImportRule>> {

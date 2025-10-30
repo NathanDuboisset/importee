@@ -114,20 +114,41 @@ impl ImportRule for LinearOrderInFolder {
         format!("folder={} order={}", folder, order)
     }
 
-    fn check_concern(&self, module_path: &ModulePath) -> bool {
+    fn check_concern(&self, module_path: &ModulePath, verbose: bool) -> bool {
         // Check if the module is under the source folder
         let rel_path = match module_path.relative_from(&self.source_folder) {
             Some(mp) => mp,
-            None => return false, // Not under source folder, not concerned
+            None => {
+                if verbose {
+                    println!(
+                        "[{}] not concerned with {} (not under source folder {})",
+                        self.name(),
+                        module_path.to_dotted(),
+                        self.source_folder.to_dotted()
+                    );
+                }
+                return false; // Not under source folder, not concerned
+            }
         };
 
         // Get the first segment of the relative path
         let head = match rel_path.segments().first() {
             Some(h) => h.as_str(),
-            None => return false, // Empty relative path (module is exactly the source folder)
+            None => {
+                return true;
+            }
         };
 
         // Check if this head is in the order index
-        self.order_index.contains_key(head)
+        let concerned = self.order_index.contains_key(head);
+        if !concerned && verbose {
+            println!(
+                "[{}] not concerned with {} (submodule '{}' not in order list)",
+                self.name(),
+                module_path.to_dotted(),
+                head
+            );
+        }
+        concerned
     }
 }

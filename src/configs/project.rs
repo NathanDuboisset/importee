@@ -9,8 +9,6 @@ use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ProjectConfig {
-    /// Absolute path to the project root (directory containing pyproject.toml)
-    pub project_root: String,
     /// List of source modules
     pub source_modules: Vec<ModulePath>,
     /// Project-scoped rules configuration

@@ -35,7 +35,7 @@ def _build_run_config(
 ) -> Dict[str, Any]:
     run_cfg: Dict[str, Any] = {
         "verbose": bool(verbose),
-        "quiet": bool(quiet),
+        # Note: 'quiet' is handled by Python layer, not passed to Rust
     }
     # CLI flag overrides config option; fall back to option if flag not set
     cfg_no_cache = bool(options.get("no_cache")) if isinstance(options, dict) else False
@@ -83,9 +83,9 @@ def run_check(
         )
 
     project_cfg = {
-        "project_root": str(config.target_dir),
         "source_modules": source_modules,
         "rules": {"linear": linear_rules},
+        # Note: project_root is dynamically determined by Rust code from file paths
     }
 
     run_cfg = _build_run_config(config.options, verbose, quiet, no_cache)

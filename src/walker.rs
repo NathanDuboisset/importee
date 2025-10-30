@@ -2,10 +2,9 @@ use crate::configs::{ProjectConfig, RunConfig};
 use crate::imports::classification::ImportResolver;
 use crate::module_path::ModulePath;
 use crate::results::{CheckResult, Issue};
+use crate::rules::ImportRule;
 use rayon::prelude::*;
 use std::fs;
-
-use crate::file_processor::process_file;
 
 pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -> CheckResult {
     let mut result = CheckResult::new();
@@ -17,10 +16,12 @@ pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -
         vec![ModulePath::new(vec![])] // empty path represents cwd root
     };
 
+    // OPTIMIZATION: Build rules once at the top level instead of per-file
+    let rules = crate::rules::build_rules(&project_config, &run_config);
+
     // Print active rules once if verbose
     if run_config.verbose.unwrap_or(false) {
         println!("[core] active rules:");
-        let rules = crate::rules::build_rules(&project_config, &run_config);
         for rule in rules.iter() {
             println!("  - {}: {}", rule.name(), rule.describe());
         }
@@ -51,7 +52,7 @@ pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -
             let resolver =
                 ImportResolver::new(root_dir, root_module, run_config.verbose.unwrap_or(false));
 
-            walk_path_parallel(module_path, &project_config, &run_config, &resolver)
+            walk_path_parallel(module_path, &run_config, &resolver, &rules)
         })
         .collect();
 
@@ -60,12 +61,28 @@ pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -
 }
 
 /// Walk a path (file or directory) and process it in parallel
+/// Rules are filtered at each level based on check_concern to avoid unnecessary checks
 fn walk_path_parallel(
     path: &ModulePath,
-    project_config: &ProjectConfig,
     run_config: &RunConfig,
     resolver: &ImportResolver,
+    rules: &[Box<dyn ImportRule>],
 ) -> Vec<Issue> {
+    // OPTIMIZATION: Filter rules that are concerned with this path
+    let verbose = run_config.verbose.unwrap_or(false);
+    let relevant_rules: Vec<&Box<dyn ImportRule>> = rules
+        .iter()
+        .filter(|rule| rule.check_concern(path, verbose))
+        .collect();
+
+    // OPTIMIZATION: If no rules apply to this path, skip entirely
+    if relevant_rules.is_empty() {
+        if verbose {
+            println!("[walker] skipping {} - no rules apply", path.to_dotted());
+        }
+        return Vec::new();
+    }
+
     let target = path.to_dir_pathbuf();
 
     // If it's a directory, walk it recursively
@@ -93,8 +110,8 @@ fn walk_path_parallel(
 
                 if entry_path.is_dir() {
                     let new_module_path = path.append(file_name.to_string());
-                    // Recursively walk subdirectory in parallel
-                    walk_path_parallel(&new_module_path, project_config, run_config, resolver)
+                    // Recursively walk subdirectory - rules will be filtered again
+                    walk_path_parallel(&new_module_path, run_config, resolver, rules)
                 } else if entry_path.is_file() {
                     // Only process .py files; ignore .pyi, .pyc, .so, etc.
                     if entry_path.extension().and_then(|e| e.to_str()) != Some("py") {
@@ -107,26 +124,21 @@ fn walk_path_parallel(
                     };
                     let new_module_path = path.append(stem);
 
-                    // Process file and collect issues
-                    let mut file_result = CheckResult::new();
-                    process_file(
+                    // Process file with only the relevant rules
+                    crate::file_processor::process_file_with_rules(
                         &new_module_path,
-                        project_config,
                         run_config,
-                        &mut file_result,
                         resolver,
-                    );
-                    file_result.issues
+                        &relevant_rules,
+                    )
                 } else {
                     Vec::new()
                 }
             })
             .collect()
     } else if target.is_file() || path.file_path().is_file() {
-        // It's a single file - process it directly
-        let mut file_result = CheckResult::new();
-        process_file(path, project_config, run_config, &mut file_result, resolver);
-        file_result.issues
+        // It's a single file - process it directly with relevant rules
+        crate::file_processor::process_file_with_rules(path, run_config, resolver, &relevant_rules)
     } else {
         Vec::new()
     }

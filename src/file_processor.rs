@@ -1,8 +1,9 @@
-use crate::configs::{ProjectConfig, RunConfig};
+use crate::configs::RunConfig;
 use crate::imports::classification::ImportResolver;
 use crate::imports::collection::get_file_imports;
 use crate::module_path::ModulePath;
-use crate::results::{CheckResult, Issue};
+use crate::results::Issue;
+use crate::rules::ImportRule;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
@@ -119,17 +120,19 @@ fn save_cache(
     }
 }
 
-pub fn process_file(
+/// OPTIMIZED: Process a file with pre-built rules (avoids rebuilding rules per file)
+/// Returns a Vec<Issue> instead of mutating a CheckResult
+pub fn process_file_with_rules(
     module_path: &ModulePath,
-    project_config: &ProjectConfig,
     run_config: &RunConfig,
-    result: &mut CheckResult,
     resolver: &ImportResolver,
-) {
+    rules: &[&Box<dyn ImportRule>],
+) -> Vec<Issue> {
     // Only handle files here; directory walking is managed by walker
     if module_path.to_dir_pathbuf().is_dir() {
-        return;
+        return Vec::new();
     }
+
     // Always print file header in verbose; quiet suppresses output
     if run_config.verbose.unwrap_or(false) {
         println!("=== {} ===", module_path.file_path().to_string_lossy());
@@ -141,7 +144,7 @@ pub fn process_file(
     let file_path = module_path.file_path();
     let file_content = match fs::read_to_string(&file_path) {
         Ok(content) => content,
-        Err(_) => return, // Can't read file, skip it
+        Err(_) => return Vec::new(), // Can't read file, skip it
     };
     let file_hash = compute_hash_from_string(&file_content);
 
@@ -182,6 +185,8 @@ pub fn process_file(
         }
     }
 
+    let mut issues = Vec::new();
+
     for imp in imports.iter() {
         if run_config.verbose.unwrap_or(false) {
             println!("{}", imp);
@@ -202,7 +207,7 @@ pub fn process_file(
                     imp.target_module.to_dotted(),
                     outcome.reason
                 );
-                result.issues.push(Issue {
+                issues.push(Issue {
                     rule_name: rule.name().to_string(),
                     path: module_path.file_path().to_string_lossy().to_string(),
                     line: imp.import_line,
@@ -217,4 +222,6 @@ pub fn process_file(
             module_path.file_path().to_string_lossy()
         );
     }
+
+    issues
 }
