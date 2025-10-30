@@ -21,18 +21,11 @@ fn cache_version_current() -> u8 {
     2
 }
 
-fn compute_file_hash(path: &Path) -> Option<String> {
+/// Compute hash from file content string (avoids re-reading the file)
+fn compute_hash_from_string(content: &str) -> String {
     let mut hasher = blake3::Hasher::new();
-    let mut file = fs::File::open(path).ok()?;
-    let mut buf = [0u8; 32 * 1024];
-    loop {
-        let n = std::io::Read::read(&mut file, &mut buf).ok()?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Some(hasher.finalize().to_hex().to_string())
+    hasher.update(content.as_bytes());
+    hasher.finalize().to_hex().to_string()
 }
 
 fn find_project_root(start: &Path) -> PathBuf {
@@ -144,32 +137,34 @@ pub fn process_file(
     let _ = io::stdout().flush();
     let rules = crate::rules::build_rules(project_config, run_config);
 
-    // Cache: compute content hash and try to load (unless disabled)
+    // Read file once and compute hash from content (avoid double read)
     let file_path = module_path.file_path();
-    let hash_opt = compute_file_hash(&file_path);
+    let file_content = match fs::read_to_string(&file_path) {
+        Ok(content) => content,
+        Err(_) => return, // Can't read file, skip it
+    };
+    let file_hash = compute_hash_from_string(&file_content);
+
     let disable_cache = run_config.no_cache.unwrap_or(false);
     let mut imports = if disable_cache {
         Vec::new()
     } else {
-        if let Some(h) = hash_opt.as_ref() {
-            if let Some(cached) = try_load_cache(resolver, module_path, h) {
-                cached
-            } else {
-                Vec::new()
-            }
+        if let Some(cached) = try_load_cache(resolver, module_path, &file_hash) {
+            cached
         } else {
             Vec::new()
         }
     };
 
     if imports.is_empty() {
-        for imp in get_file_imports(module_path, resolver, run_config).into_iter() {
+        // Pass the file content we already read to avoid re-reading
+        for imp in
+            get_file_imports(module_path, resolver, run_config, Some(&file_content)).into_iter()
+        {
             imports.push(imp);
         }
         if !disable_cache {
-            if let Some(h) = hash_opt.as_ref() {
-                save_cache(resolver, module_path, h, &imports);
-            }
+            save_cache(resolver, module_path, &file_hash, &imports);
         }
     }
 

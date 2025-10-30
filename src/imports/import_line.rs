@@ -33,18 +33,27 @@ impl fmt::Display for ImportLine {
 
 /// Parse imports for a module identified by its ModulePath. This preserves the full dotted path
 /// for `from_module` instead of only using the file's stem.
+/// If file_content is provided, it will be used instead of reading the file (performance optimization).
 pub fn get_file_imports(
     module: &ModulePath,
     resolver: &ImportResolver,
     run_config: &RunConfig,
+    file_content: Option<&str>,
 ) -> Vec<ImportLine> {
     let file_path = module.file_path();
-    let file_content = match fs::read_to_string(&file_path) {
-        Ok(content) => content,
-        Err(_) => return Vec::new(),
+    let content: String;
+    let file_content_ref = match file_content {
+        Some(c) => c,
+        None => {
+            content = match fs::read_to_string(&file_path) {
+                Ok(c) => c,
+                Err(_) => return Vec::new(),
+            };
+            &content
+        }
     };
 
-    let ast = match parse(&file_content, Mode::Module, &file_path.to_string_lossy()) {
+    let ast = match parse(file_content_ref, Mode::Module, &file_path.to_string_lossy()) {
         Ok(suite) => suite,
         Err(_) => return Vec::new(),
     };
@@ -61,7 +70,7 @@ pub fn get_file_imports(
             stmt,
             module,
             resolver,
-            &file_content,
+            file_content_ref,
             &mut results,
             run_config,
         );
@@ -151,6 +160,10 @@ fn collect_imports_deep(
     run_config: &RunConfig,
 ) {
     collect_imports_from_stmt(stmt, current_module, resolver, source, out, run_config);
+
+    // PERFORMANCE: Deep traversal disabled - only collect top-level imports
+    // Uncomment below to re-enable collecting imports from inside functions, classes, etc.
+    /*
     match stmt {
         Stmt::FunctionDef(inner) => {
             for s in inner.body.iter() {
@@ -204,4 +217,5 @@ fn collect_imports_deep(
         }
         _ => {}
     }
+    */
 }
