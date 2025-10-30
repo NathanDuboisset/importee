@@ -1,6 +1,6 @@
 use crate::configs::{ProjectConfig, RunConfig};
 use crate::imports::classification::ImportResolver;
-use crate::imports::import_line::get_file_imports;
+use crate::imports::collection::get_file_imports;
 use crate::module_path::ModulePath;
 use crate::results::{CheckResult, Issue};
 use serde::{Deserialize, Serialize};
