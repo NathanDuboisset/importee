@@ -14,6 +14,9 @@ pub struct ProjectConfig {
     /// Project-scoped rules configuration
     #[serde(default)]
     pub rules: ProjectRulesConfig,
+    /// List of glob patterns to exclude from checking
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

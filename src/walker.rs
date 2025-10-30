@@ -3,6 +3,7 @@ use crate::imports::classification::ImportResolver;
 use crate::module_path::ModulePath;
 use crate::results::{CheckResult, Issue};
 use crate::rules::ImportRule;
+use globset::{Glob, GlobSetBuilder};
 use rayon::prelude::*;
 use std::fs;
 
@@ -19,11 +20,30 @@ pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -
     // OPTIMIZATION: Build rules once at the top level instead of per-file
     let rules = crate::rules::build_rules(&project_config, &run_config);
 
+    // Build exclusion GlobSet from exclude patterns
+    let mut exclude_builder = GlobSetBuilder::new();
+    for pattern in &project_config.exclude {
+        match Glob::new(pattern) {
+            Ok(glob) => {
+                exclude_builder.add(glob);
+            }
+            Err(e) => {
+                if run_config.verbose.unwrap_or(false) {
+                    eprintln!("[core] invalid exclude pattern '{}': {}", pattern, e);
+                }
+            }
+        }
+    }
+    let exclude_set = exclude_builder.build().ok();
+
     // Print active rules once if verbose
     if run_config.verbose.unwrap_or(false) {
         println!("[core] active rules:");
         for rule in rules.iter() {
             println!("  - {}: {}", rule.name(), rule.describe());
+        }
+        if !project_config.exclude.is_empty() {
+            println!("[core] exclude patterns: {:?}", project_config.exclude);
         }
     }
 
@@ -52,7 +72,13 @@ pub fn run_check_imports(project_config: ProjectConfig, run_config: RunConfig) -
             let resolver =
                 ImportResolver::new(root_dir, root_module, run_config.verbose.unwrap_or(false));
 
-            walk_path_parallel(module_path, &run_config, &resolver, &rules)
+            walk_path_parallel(
+                module_path,
+                &run_config,
+                &resolver,
+                &rules,
+                exclude_set.as_ref(),
+            )
         })
         .collect();
 
@@ -67,9 +93,25 @@ fn walk_path_parallel(
     run_config: &RunConfig,
     resolver: &ImportResolver,
     rules: &[Box<dyn ImportRule>],
+    exclude_set: Option<&globset::GlobSet>,
 ) -> Vec<Issue> {
-    // OPTIMIZATION: Filter rules that are concerned with this path
     let verbose = run_config.verbose.unwrap_or(false);
+
+    // Check if path matches exclusion patterns
+    if let Some(excludes) = exclude_set {
+        let file_path = path.file_path();
+        if excludes.is_match(&file_path) {
+            if verbose {
+                println!(
+                    "[walker] excluded {} (matches exclude pattern)",
+                    path.to_dotted()
+                );
+            }
+            return Vec::new();
+        }
+    }
+
+    // OPTIMIZATION: Filter rules that are concerned with this path
     let relevant_rules: Vec<&Box<dyn ImportRule>> = rules
         .iter()
         .filter(|rule| rule.check_concern(path, verbose))
@@ -111,7 +153,7 @@ fn walk_path_parallel(
                 if entry_path.is_dir() {
                     let new_module_path = path.append(file_name.to_string());
                     // Recursively walk subdirectory - rules will be filtered again
-                    walk_path_parallel(&new_module_path, run_config, resolver, rules)
+                    walk_path_parallel(&new_module_path, run_config, resolver, rules, exclude_set)
                 } else if entry_path.is_file() {
                     // Only process .py files; ignore .pyi, .pyc, .so, etc.
                     if entry_path.extension().and_then(|e| e.to_str()) != Some("py") {

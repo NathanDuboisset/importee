@@ -17,5 +17,7 @@ rustpython-parser = "0.3"
 rustpython-ast = "0.3"
 blake3 = "1"
 rayon = "1.10"
+globset = "0.4"
+dashmap = "6.1"
 
 

@@ -1,24 +1,37 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::module_path::ModulePath;
+use dashmap::DashMap;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ImportResolver {
-    cache: Arc<RwLock<HashMap<String, bool>>>,
+    cache: Arc<DashMap<String, bool>>,
     root_dir: PathBuf,
     root_module: Option<String>,
-    verbose: bool,
+    /// Cached prefix string for performance (root_module + ".")
+    root_module_prefix: Option<String>,
+}
+
+impl Default for ImportResolver {
+    fn default() -> Self {
+        Self {
+            cache: Arc::new(DashMap::new()),
+            root_dir: PathBuf::new(),
+            root_module: None,
+            root_module_prefix: None,
+        }
+    }
 }
 
 impl ImportResolver {
-    pub fn new(root_dir: impl Into<PathBuf>, root_module: Option<String>, verbose: bool) -> Self {
+    pub fn new(root_dir: impl Into<PathBuf>, root_module: Option<String>, _verbose: bool) -> Self {
+        let root_module_prefix = root_module.as_ref().map(|m| format!("{}.", m));
         Self {
-            cache: Arc::new(RwLock::new(HashMap::new())),
+            cache: Arc::new(DashMap::new()),
             root_dir: root_dir.into(),
             root_module,
-            verbose,
+            root_module_prefix,
         }
     }
 
@@ -34,16 +47,21 @@ impl ImportResolver {
             return false;
         }
         // Accept both root-prefixed and project-relative dotted names
+        // Use cached prefix to avoid string allocation
         let dotted_rel = if let Some(root_mod) = &self.root_module {
             if dotted == root_mod {
-                "".to_string()
-            } else if let Some(stripped) = dotted.strip_prefix(&(root_mod.clone() + ".")) {
-                stripped.to_string()
+                ""
+            } else if let Some(prefix) = &self.root_module_prefix {
+                if let Some(stripped) = dotted.strip_prefix(prefix.as_str()) {
+                    stripped
+                } else {
+                    dotted
+                }
             } else {
-                dotted.to_string()
+                dotted
             }
         } else {
-            dotted.to_string()
+            dotted
         };
         if dotted_rel.is_empty() {
             return self.root_dir.join("__init__.py").exists();
@@ -67,21 +85,20 @@ impl ImportResolver {
         }
 
         // If the import already starts with the root module, do not prefix further
+        // Use cached prefix to avoid string allocation
         if let Some(root_mod) = &self.root_module {
-            if import == root_mod || import.starts_with(&(root_mod.clone() + ".")) {
+            if import == root_mod {
                 return ModulePath::from_dotted(import);
+            }
+            if let Some(prefix) = &self.root_module_prefix {
+                if import.starts_with(prefix.as_str()) {
+                    return ModulePath::from_dotted(import);
+                }
             }
         }
 
         // Try as-is first (project-relative)
         if self.module_exists_under_root(import) {
-            if self.verbose {
-                println!(
-                    "[resolve] cur={} import={} chose=as-is",
-                    current_module.to_dotted(),
-                    import
-                );
-            }
             return ModulePath::from_dotted(import);
         }
 
@@ -101,34 +118,11 @@ impl ImportResolver {
                 self.module_exists_under_root(&candidate)
             };
             if exists {
-                if self.verbose {
-                    println!(
-                        "[resolve] cur={} import={} chose={}",
-                        current_module.to_dotted(),
-                        import,
-                        candidate
-                    );
-                }
                 return ModulePath::from_dotted(&candidate);
-            }
-            if self.verbose {
-                println!(
-                    "[resolve] cur={} import={} try={} -> missing",
-                    current_module.to_dotted(),
-                    import,
-                    candidate
-                );
             }
         }
 
         // Fallback to the original absolute form
-        if self.verbose {
-            println!(
-                "[resolve] cur={} import={} fallback=as-is",
-                current_module.to_dotted(),
-                import
-            );
-        }
         ModulePath::from_dotted(import)
     }
     /// Returns true if the dotted module path points inside the project root.
@@ -136,9 +130,9 @@ impl ImportResolver {
         if dotted.is_empty() {
             return false;
         }
-        // Fast read path
-        if let Some(found) = self.cache.read().ok().and_then(|c| c.get(dotted).copied()) {
-            return found;
+        // Fast path: check cache (lock-free with DashMap)
+        if let Some(found) = self.cache.get(dotted) {
+            return *found;
         }
         // Resolve and cache
         let mut is_local = self.exists_in_root(dotted);
@@ -146,9 +140,8 @@ impl ImportResolver {
             // Also consider modules that exist under root without explicit root prefix
             is_local = self.module_exists_under_root(dotted);
         }
-        if let Ok(mut c) = self.cache.write() {
-            c.insert(dotted.to_string(), is_local);
-        }
+        // Insert into cache (lock-free)
+        self.cache.insert(dotted.to_string(), is_local);
         is_local
     }
 
@@ -158,13 +151,16 @@ impl ImportResolver {
             if dotted == root_mod {
                 return self.root_dir.join("__init__.py").exists();
             }
-            if let Some(stripped) = dotted.strip_prefix(&(root_mod.clone() + ".")) {
-                let rel = stripped.replace('.', "/");
-                let file = self.root_dir.join(format!("{}.py", rel));
-                if file.exists() {
-                    return true;
+            // Use cached prefix to avoid string allocation
+            if let Some(prefix) = &self.root_module_prefix {
+                if let Some(stripped) = dotted.strip_prefix(prefix.as_str()) {
+                    let rel = stripped.replace('.', "/");
+                    let file = self.root_dir.join(format!("{}.py", rel));
+                    if file.exists() {
+                        return true;
+                    }
+                    return self.root_dir.join(&rel).join("__init__.py").exists();
                 }
-                return self.root_dir.join(&rel).join("__init__.py").exists();
             }
             // Not under root module => external
             return false;
@@ -192,7 +188,13 @@ impl ImportResolver {
 
         // Compute why it's considered external
         if let Some(root_mod) = &self.root_module {
-            if !(dotted == *root_mod || dotted.starts_with(&(root_mod.clone() + "."))) {
+            // Use cached prefix to avoid string allocation
+            let has_prefix = if let Some(prefix) = &self.root_module_prefix {
+                dotted == *root_mod || dotted.starts_with(prefix.as_str())
+            } else {
+                dotted == *root_mod
+            };
+            if !has_prefix {
                 return (false, format!("not in root module '{}'", root_mod));
             }
             // Has correct prefix but path missing

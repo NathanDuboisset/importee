@@ -6,6 +6,27 @@ use rustpython_ast::{Mod, Ranged, Stmt};
 use rustpython_parser::{parse, Mode};
 use std::fs;
 
+/// Build a line offset table for fast line number lookups.
+/// Returns a vector where offsets[i] is the byte offset of line i+1.
+fn build_line_offsets(source: &str) -> Vec<usize> {
+    let mut offsets = vec![0];
+    for (i, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            offsets.push(i + 1);
+        }
+    }
+    offsets
+}
+
+/// Convert a byte offset to a line number using the pre-built offset table.
+/// Binary search for O(log n) lookup instead of O(n) counting.
+fn offset_to_line(offset: usize, line_offsets: &[usize]) -> i32 {
+    match line_offsets.binary_search(&offset) {
+        Ok(line) => (line + 1) as i32,
+        Err(line) => line as i32,
+    }
+}
+
 /// Parse imports for a module identified by its ModulePath. This preserves the full dotted path
 /// for `from_module` instead of only using the file's stem.
 /// If file_content is provided, it will be used instead of reading the file (performance optimization).
@@ -28,10 +49,14 @@ pub fn get_file_imports(
         }
     };
 
+    // Parse with rustpython parser
     let ast = match parse(file_content_ref, Mode::Module, &file_path.to_string_lossy()) {
         Ok(suite) => suite,
         Err(_) => return Vec::new(),
     };
+
+    // Build line offset table once for O(log n) line number lookups
+    let line_offsets = build_line_offsets(file_content_ref);
 
     let mut results: Vec<ImportLine> = Vec::new();
 
@@ -46,6 +71,7 @@ pub fn get_file_imports(
             module,
             resolver,
             file_content_ref,
+            &line_offsets,
             &mut results,
             run_config,
         );
@@ -58,7 +84,7 @@ fn collect_imports_from_stmt(
     stmt: &Stmt,
     current_module: &ModulePath,
     resolver: &ImportResolver,
-    source: &str,
+    line_offsets: &[usize],
     out: &mut Vec<ImportLine>,
     run_config: &RunConfig,
 ) {
@@ -68,14 +94,14 @@ fn collect_imports_from_stmt(
     match stmt {
         Stmt::Import(inner) => {
             let start = inner.range().start().to_usize();
-            line_no = (1 + source[..start].bytes().filter(|&b| b == b'\n').count()) as i32;
+            line_no = offset_to_line(start, line_offsets);
             if let Some(alias) = inner.names.first() {
                 base = Some(alias.name.to_string());
             }
         }
         Stmt::ImportFrom(inner) => {
             let start = inner.range().start().to_usize();
-            line_no = (1 + source[..start].bytes().filter(|&b| b == b'\n').count()) as i32;
+            line_no = offset_to_line(start, line_offsets);
             // Prefer the module; only use relative dots when module is missing
             let module_name = inner
                 .module
@@ -131,10 +157,18 @@ fn collect_imports_deep(
     current_module: &ModulePath,
     resolver: &ImportResolver,
     source: &str,
+    line_offsets: &[usize],
     out: &mut Vec<ImportLine>,
     run_config: &RunConfig,
 ) {
-    collect_imports_from_stmt(stmt, current_module, resolver, source, out, run_config);
+    collect_imports_from_stmt(
+        stmt,
+        current_module,
+        resolver,
+        line_offsets,
+        out,
+        run_config,
+    );
 
     // PERFORMANCE: Deep traversal disabled - only collect top-level imports
     // Uncomment below to re-enable collecting imports from inside functions, classes, etc.

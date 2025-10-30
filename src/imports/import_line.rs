@@ -5,7 +5,7 @@ use std::fmt;
 pub struct ImportLine {
     pub from_module: ModulePath,
     pub target_module: ModulePath,
-    pub import_line: i32,
+    pub import_line: u32,
 }
 
 impl fmt::Display for ImportLine {

@@ -59,6 +59,10 @@ def run_check(
     # Build project config
     source_module = _coerce_str_list(config.options.get("source_module"))
     source_modules = [source_module] if source_module else []
+
+    # Extract exclude patterns
+    exclude = _coerce_str_list(config.options.get("exclude"))
+
     # Rules: allow single or array of tables for linear
     rules = config.options.get("rules") or {}
     linear_opt = rules.get("linear") if isinstance(rules, dict) else None
@@ -85,6 +89,7 @@ def run_check(
     project_cfg = {
         "source_modules": source_modules,
         "rules": {"linear": linear_rules},
+        "exclude": exclude,
         # Note: project_root is dynamically determined by Rust code from file paths
     }
 

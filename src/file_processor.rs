@@ -138,7 +138,6 @@ pub fn process_file_with_rules(
         println!("=== {} ===", module_path.file_path().to_string_lossy());
     }
     let _ = io::stdout().flush();
-    let rules = crate::rules::build_rules(project_config, run_config);
 
     // Read file once and compute hash from content (avoid double read)
     let file_path = module_path.file_path();
