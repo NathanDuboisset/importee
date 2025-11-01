@@ -20,10 +20,10 @@ fn build_line_offsets(source: &str) -> Vec<usize> {
 
 /// Convert a byte offset to a line number using the pre-built offset table.
 /// Binary search for O(log n) lookup instead of O(n) counting.
-fn offset_to_line(offset: usize, line_offsets: &[usize]) -> i32 {
+fn offset_to_line(offset: usize, line_offsets: &[usize]) -> u32 {
     match line_offsets.binary_search(&offset) {
-        Ok(line) => (line + 1) as i32,
-        Err(line) => line as i32,
+        Ok(line) => (line + 1) as u32,
+        Err(line) => line as u32,
     }
 }
 
@@ -89,7 +89,7 @@ fn collect_imports_from_stmt(
     run_config: &RunConfig,
 ) {
     let mut base: Option<String> = None;
-    let mut line_no: i32 = 0;
+    let mut line_no: u32 = 0;
 
     match stmt {
         Stmt::Import(inner) => {

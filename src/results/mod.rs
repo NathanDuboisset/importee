@@ -9,7 +9,7 @@ pub struct CheckResult {
 pub struct Issue {
     pub rule_name: String,
     pub path: String,
-    pub line: i32,
+    pub line: u32,
     pub message: String,
 }
 

@@ -15,7 +15,7 @@ struct CacheEntry {
     version: u8,
     hash: String,
     // (target_dotted, line_no)
-    imports: Vec<(String, i32)>,
+    imports: Vec<(String, u32)>,
 }
 
 fn cache_version_current() -> u8 {
@@ -106,7 +106,7 @@ fn save_cache(
     let project_root = find_project_root(resolver.root_dir());
     let cache_root = project_root.join(".importee_cache");
     ensure_cache_dir(&cache_root);
-    let flat: Vec<(String, i32)> = imports
+    let flat: Vec<(String, u32)> = imports
         .iter()
         .map(|imp| (imp.target_module.to_dotted(), imp.import_line))
         .collect();
