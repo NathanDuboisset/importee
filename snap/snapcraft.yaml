@@ -1,0 +1,50 @@
+name: importee
+base: core22
+version: '0.1.0'
+summary: Python import checker with Rust backend
+description: |
+  Importee checks Python import ordering rules and enforces dependencies
+  in your Python projects. Uses Rust for parsing and analysis.
+
+grade: stable
+confinement: strict
+
+apps:
+  importee:
+    command: bin/importee
+    plugs:
+      - home
+      - removable-media
+
+parts:
+  importee:
+    plugin: python
+    source: .
+    build-packages:
+      - cargo
+      - rustc
+      - libssl-dev
+      - pkg-config
+    stage-packages:
+      - libssl3
+    python-packages:
+      - maturin
+    override-build: |
+      # Install Rust toolchain
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      export PATH="$HOME/.cargo/bin:$PATH"
+      
+      # Install maturin and build the package
+      pip install maturin[patchelf]
+      maturin build --release --interpreter python3
+      
+      # Install the built wheel
+      pip install target/wheels/*.whl
+      
+      # Copy to the install directory
+      craftctl default
+    python-requirements:
+      - requirements.txt
+    organize:
+      '*': /
+
