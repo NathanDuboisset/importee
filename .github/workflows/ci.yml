@@ -31,10 +31,19 @@ jobs:
         uses: Swatinem/rust-cache@v2
       
       - name: Install maturin
-        run: pip install maturin[patchelf]
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            pip install maturin[patchelf]
+          else
+            pip install maturin
+          fi
+        shell: bash
       
-      - name: Build package
-        run: maturin develop
+      - name: Build and install package
+        run: |
+          maturin build --release -o dist
+          pip install dist/*.whl
+        shell: bash
       
       - name: Run tests (if any)
         run: |
@@ -91,7 +100,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Install maturin
-        run: pip install maturin[patchelf]
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            pip install maturin[patchelf]
+          else
+            pip install maturin
+          fi
+        shell: bash
       
       - name: Build wheels
         run: maturin build --release --out dist
