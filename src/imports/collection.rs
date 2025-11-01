@@ -156,7 +156,7 @@ fn collect_imports_deep(
     stmt: &Stmt,
     current_module: &ModulePath,
     resolver: &ImportResolver,
-    source: &str,
+    _source: &str,
     line_offsets: &[usize],
     out: &mut Vec<ImportLine>,
     run_config: &RunConfig,
