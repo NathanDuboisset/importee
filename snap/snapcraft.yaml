@@ -1,6 +1,6 @@
 name: importee
 base: core22
-version: '0.1.0'
+version: '0.1.3'
 summary: Python import checker with Rust backend
 description: |
   Importee checks Python import ordering rules and enforces dependencies

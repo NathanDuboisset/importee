@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2025-11-02
+
 ### Added
 - CI/CD pipeline with GitHub Actions
 - PyPI publishing workflow with trusted publishing
@@ -22,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI interface
 - Configuration via pyproject.toml
 
-[Unreleased]: https://github.com/yourusername/importee/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/importee/releases/tag/v0.1.0
+[Unreleased]: https://github.com/NathanDuboisset/importee/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/NathanDuboisset/importee/compare/v0.1.0...v0.1.3
+[0.1.0]: https://github.com/NathanDuboisset/importee/releases/tag/v0.1.0
 
