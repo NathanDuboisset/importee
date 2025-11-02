@@ -9,7 +9,7 @@ description = "Python import checker with Rust backend"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Duboisset Nathan", email = "nathan.duboisset@example.com" }]
+authors = [{ name = "Duboisset Nathan", email = "nathan.duboisset@gmail.com" }]
 keywords = ["linter", "imports", "python", "rust", "code-quality"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-urls = { Homepage = "https://github.com/yourusername/importee", Repository = "https://github.com/yourusername/importee", Issues = "https://github.com/yourusername/importee/issues" }
+urls = { Homepage = "https://github.com/NathanDuboisset/importee", Repository = "https://github.com/NathanDuboisset/importee", Issues = "https://github.com/NathanDuboisset/importee/issues" }
 dependencies = [
     "click>=8.1,<9",
     "tomli>=2.03",

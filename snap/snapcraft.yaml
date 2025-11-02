@@ -6,6 +6,13 @@ description: |
   Importee checks Python import ordering rules and enforces dependencies
   in your Python projects. Uses Rust for parsing and analysis.
 
+title: Importee
+license: BSD-2-Clause
+contact: nathan.duboisset@gmail.com
+website: https://github.com/NathanDuboisset/importee
+source-code: https://github.com/NathanDuboisset/importee
+issues: https://github.com/NathanDuboisset/importee/issues
+
 grade: stable
 confinement: strict
 
@@ -38,13 +45,15 @@ parts:
       pip install maturin[patchelf]
       maturin build --release --interpreter python3
       
-      # Install the built wheel
-      pip install target/wheels/*.whl
+      # Install into a fresh venv in the install directory
+      python3 -m venv $CRAFT_PART_INSTALL
+      $CRAFT_PART_INSTALL/bin/pip install --upgrade pip
+      $CRAFT_PART_INSTALL/bin/pip install target/wheels/*.whl
       
-      # Copy to the install directory
-      craftctl default
-    python-requirements:
-      - requirements.txt
-    organize:
-      '*': /
+      # Fix shebangs to use the snap's python
+      sed -i '1s|^#!.*python.*|#!/usr/bin/env python3|' $CRAFT_PART_INSTALL/bin/*
+    stage:
+      - bin
+      - lib
+      - pyvenv.cfg
 

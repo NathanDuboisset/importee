@@ -51,3 +51,6 @@ target/wheels/
 /importee/_rust.pyi
 importee/_rust*.so
 importee/_rust.*.so
+
+
+*.snap
